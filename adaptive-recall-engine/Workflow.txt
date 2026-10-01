@@ -1,0 +1,1308 @@
+You are the lead algorithm researcher working on the Adaptive Recall Engine competition problem.
+
+Your task is to develop the strongest legitimate general-purpose adapter possible for this benchmark.
+
+IMPORTANT SUBMISSION CONSTRAINT:
+The ONLY repository file you are allowed to modify or create is:
+
+    adapters/myteam.py
+
+Do not modify:
+- recovery_model.py
+- harness.py
+- metrics.py
+- data.py
+- adapter.py
+- run.py
+- self_check.py
+- any existing adapter
+- requirements.txt
+- README/PROBLEM files
+- benchmark data
+- scoring code
+
+The final submission must consist of exactly the single adapter file:
+    adapters/myteam.py
+
+You may inspect all existing files because they are part of the benchmark specification. If you need temporary experimentation, do not modify the repository. Prefer in-memory Python experiments or temporary files outside the repository, and do not leave experimental files in the submission directory.
+
+============================================================
+1. AUTHORITATIVE PROBLEM
+============================================================
+
+Read and understand the complete:
+
+    adaptive-recall-engine/PROBLEM.md
+
+and also inspect:
+
+    README.md
+    adapter.py
+    recovery_model.py
+    data.py
+    metrics.py
+    harness.py
+    run.py
+    adapters/dummy.py
+    adapters/class_conditional.py
+    adapters/variance.py
+
+The problem is:
+
+A fixed associative-memory/retrieval engine stores K patterns X of dimension N.
+
+For the public benchmark:
+
+    X.shape = (K, 64)
+    query.shape = (64,)
+
+A query is a corrupted version of one of the stored patterns.
+
+Our adapter does NOT return:
+- a predicted class
+- a repaired query
+- a stored pattern
+- a modified model
+- a modified retrieval algorithm
+
+It returns exactly one scalar precision/trust weight per input dimension:
+
+    pi.shape = (64,)
+
+The evaluator then feeds those weights into the frozen retrieval dynamics.
+
+The identity baseline is:
+
+    pi = ones(64)
+
+Our goal is to produce a query-dependent precision vector that improves retrieval accuracy and convergence balance across unseen pattern collections, corruptions, and random seeds.
+
+============================================================
+2. EXACT SUBMISSION INTERFACE
+============================================================
+
+The final file must contain a class compatible with:
+
+    from adapter import Adapter
+    import numpy as np
+
+    class Engine(Adapter):
+        def __init__(self, stored_patterns, model_params):
+            ...
+        
+        def predict_precision(self, corrupted_query):
+            ...
+
+The constructor receives:
+
+    stored_patterns
+        X with shape (K, N)
+
+    model_params containing:
+
+        R
+        eta
+        beta
+        dt
+        T_max
+        tol
+        T_in
+        pi_min
+        pi_max
+
+The per-query method receives:
+
+    corrupted_query
+        q with shape (N,)
+
+and must return:
+
+    exactly N finite numerical values.
+
+For public evaluation N=64, but do not hardcode 64 if it can be avoided.
+
+The evaluator clips and mean-normalizes the weights, so the returned vector should be designed with that in mind.
+
+Treat X, model_params and q as read-only.
+
+============================================================
+3. FROZEN MODEL
+============================================================
+
+DO NOT MODIFY recovery_model.py.
+
+Understand its equations exactly.
+
+The energy is approximately:
+
+    E(a) =
+        0.5 * a^T R a
+        - (eta / beta) * log(sum_i exp(beta * x_i^T a))
+
+The gradient is:
+
+    g(a) =
+        R a
+        - eta X^T softmax(beta X a)
+
+The Hessian is:
+
+    H(a) =
+        R
+        - eta * beta * X^T (diag(s) - s s^T) X
+
+where:
+
+    s = softmax(beta X a)
+
+The precision-controlled dynamics are:
+
+    update =
+        - pi elementwise_multiply gradient
+        + external_input
+
+During the initial input window:
+
+    external_input = corrupted_query
+
+After T_in:
+
+    external_input = 0
+
+The Euler update is:
+
+    a_next = a + dt * update
+
+The model runs until T_max or convergence.
+
+Final classification is based on cosine similarity between the final state and stored patterns.
+
+CRITICAL CONCEPT:
+
+Positive diagonal precision does not fundamentally change the stationary points of the underlying energy because the equilibrium condition is still approximately:
+
+    gradient = 0
+
+Precision primarily changes HOW THE TRAJECTORY GETS THERE.
+
+Therefore this is fundamentally a:
+    BASIN / TRAJECTORY / CONVERGENCE CONTROL
+problem.
+
+Do not approach it as merely "predict the hidden class."
+
+============================================================
+4. DATA GENERATION
+============================================================
+
+Read data.py carefully.
+
+Stored patterns are clustered synthetic unit vectors.
+
+Default public setup:
+
+    K = 16
+    N = 64
+    clusters = 4
+    intra_sim = 0.5
+
+Patterns are deliberately clustered so direct cosine classification is not trivial.
+
+Corruption works approximately like:
+
+    choose a fraction p of dimensions
+    set those dimensions to zero
+    add Gaussian noise
+    normalize
+
+Noise levels in the full public evaluation:
+
+    p = 0.60
+    p = 0.75
+    p = 0.85
+
+Each query comes from one hidden stored pattern.
+
+The adapter NEVER receives the hidden source index.
+
+New patterns and queries are generated for every seed.
+
+Therefore:
+
+DO NOT:
+- memorize seed 42
+- memorize seed 101
+- memorize query sequences
+- hardcode stored patterns
+- hardcode expected outputs
+- rely on public seed ordering
+- assume K=16 forever
+- assume exact published numerical matrices
+
+The algorithm must infer structure from the current X, R and q.
+
+============================================================
+5. WHAT THE ADAPTER CAN USE
+============================================================
+
+The adapter has unusually useful legitimate information.
+
+At construction time it receives:
+
+    X
+    R
+    eta
+    beta
+    dt
+    T_max
+    tol
+    T_in
+    pi_min
+    pi_max
+
+For each query it receives:
+
+    q
+
+Therefore it may legitimately perform numerical analysis such as:
+
+- cosine similarities X @ q
+- softmax over stored patterns
+- posterior-like pattern probabilities
+- reconstruction of the expected pattern
+- per-dimension residuals
+- per-dimension agreement/disagreement
+- pairwise pattern ambiguity
+- dimensional variance across X
+- discriminative power of dimensions
+- R-based coupling analysis
+- gradient calculations
+- Hessian calculations
+- local curvature calculations
+- numerical simulations of the frozen model
+- approximate trajectory simulations
+- diagonal preconditioning
+- query-dependent precision optimization
+
+provided all of this is done normally inside myteam.py.
+
+Do not access hidden labels or evaluator internals.
+
+============================================================
+6. EXACT SCORING
+============================================================
+
+There are 100 total points.
+
+Recovery accuracy:
+    70 points
+
+Convergence balance:
+    20 points
+
+Code quality:
+    10 points
+
+Automated maximum is therefore 90.
+
+------------------------------------------------------------
+6A. RETRIEVAL ACCURACY
+------------------------------------------------------------
+
+For every seed:
+
+    baseline_acc = accuracy with pi = 1
+
+    agent_acc = accuracy using our precision controller
+
+    delta = agent_acc - baseline_acc
+
+The mean delta across seeds is used.
+
+Full retrieval points occur at:
+
+    mean delta >= +0.08
+
+The retrieval score scales linearly between:
+
+    delta = 0       -> 0 points
+    delta = +0.08   -> 70 points
+
+If any evaluated seed has:
+
+    delta < 0
+
+the retrieval score is halved.
+
+Therefore CONSISTENCY IS EXTREMELY IMPORTANT.
+
+A controller that produces +0.15 on one seed and -0.05 on another is dangerous.
+
+A stable +0.04 across seeds can be more valuable than an unstable +0.10.
+
+------------------------------------------------------------
+6B. BALANCE / ANISOTROPY
+------------------------------------------------------------
+
+For selected stored patterns, the evaluator:
+
+1. finds the true equilibrium under uniform precision
+2. computes Hessian H at that equilibrium
+3. probes our adapter with a lightly perturbed version of the pattern
+4. gets our precision vector
+5. computes:
+
+    sqrt(pi) H sqrt(pi)
+
+6. measures its eigenvalue spread.
+
+Baseline:
+
+    pi = 1
+
+Reduction:
+
+    baseline_spread / agent_spread
+
+Full balance score occurs at:
+
+    5x reduction
+
+Scoring is logarithmic.
+
+If mean reduction <= 1:
+
+    zero balance points.
+
+If ANY evaluated seed has reduction <= 1:
+
+    balance score is halved.
+
+Therefore we need balance improvement to be robust too.
+
+============================================================
+7. IMPORTANT SCORING NUANCE
+============================================================
+
+The harness also reports whether the dynamics beat direct cosine classification.
+
+This is useful diagnostically.
+
+However, inspect the ACTUAL harness before assuming it is a hard scoring gate.
+
+The current harness implementation treats the dynamics-vs-direct-classification gate as informational for scoring.
+
+Do not waste effort optimizing an imaginary penalty that isn't actually applied.
+
+The real hard penalties are:
+
+- negative retrieval delta on any seed
+- balance reduction <= 1 on any seed
+
+============================================================
+8. SUBMISSION INTEGRITY RULES
+============================================================
+
+The final algorithm MUST be legitimate.
+
+Absolutely prohibited:
+
+- caller-frame inspection
+- inspecting evaluator locals
+- inspecting hidden truths
+- closures/globals used to recover evaluator state
+- monkeypatching
+- modifying model objects
+- modifying query arrays
+- modifying NumPy RNG state used by evaluator
+- modifying reports
+- modifying clocks
+- modifying limits
+- modifying scoring state
+- seed-specific lookup tables
+- query-specific lookup tables
+- reconstructed truth sequences
+- reflection intended to bypass the interface
+- dynamic imports for cheating
+- eval
+- exec
+- subprocesses
+- filesystem access
+- network access
+- environment inspection
+- native-code loading
+- encoded/obfuscated payloads
+- modifying benchmark files
+- hardcoded public-seed solutions
+
+Allowed:
+
+- NumPy
+- ordinary numerical linear algebra
+- deterministic numerical optimization
+- calculations using X
+- calculations using R
+- calculations using q
+- calculations using model parameters
+- disclosed seed-independent learned parameters, if genuinely general-purpose
+- approximate simulations of the frozen dynamics
+- analytical approximations
+- query-dependent optimization
+
+The final code should be readable enough for manual review.
+
+============================================================
+9. FIRST RESEARCH TASK
+============================================================
+
+Do NOT immediately settle on a simple heuristic.
+
+First understand WHY precision affects recovery.
+
+Analyze:
+
+    q
+    X
+    R
+    gradient(q)
+    softmax(beta Xq)
+    Hessian(q)
+    approximate attractors
+    candidate stored-pattern posterior
+    dimensions that are reliable
+    dimensions that are ambiguous
+    dimensions that discriminate between competing patterns
+    R-coupled dimensions
+
+Think in terms of:
+
+    "Which dimensions should move strongly during the recovery trajectory?"
+
+rather than:
+
+    "Which dimensions look large?"
+
+============================================================
+10. IMPORTANT OBSERVATION ABOUT THE CORRUPTION
+============================================================
+
+The corruption process is informative.
+
+Masked dimensions become:
+
+    approximately Gaussian noise around zero.
+
+Observed dimensions retain signal from the source pattern plus noise.
+
+Therefore |q_i| contains some information about whether a dimension survived corruption.
+
+But:
+
+    high |q_i|
+
+does NOT automatically mean:
+
+    high reliability.
+
+A naturally large pattern coordinate may be highly ambiguous across stored patterns.
+
+Likewise a small coordinate may still be highly discriminative.
+
+Investigate reliability relative to X rather than using only |q|.
+
+============================================================
+11. USE THE STORED PATTERNS
+============================================================
+
+The stored patterns are available.
+
+For each query, investigate:
+
+    z_k = beta * X_k dot q
+
+and:
+
+    p_k = softmax(z)
+
+Then investigate the posterior-like reconstruction:
+
+    m = sum_k p_k X_k
+
+This gives a query-conditioned estimate of what the model currently believes the pattern looks like.
+
+Study:
+
+    q_i
+    m_i
+    q_i - m_i
+    q_i * m_i
+    |q_i - m_i|
+    |q_i|
+    variance of X[:, i]
+    agreement of candidate patterns at dimension i
+    disagreement between top candidate patterns at dimension i
+
+These quantities may provide better precision signals than raw query magnitude.
+
+But be careful:
+
+If the top candidate is wrong, blindly reconstructing from it can reinforce the wrong basin.
+
+Investigate mixtures of competing candidates rather than only argmax.
+
+============================================================
+12. COMPETING-PATTERN ANALYSIS
+============================================================
+
+Because patterns are clustered, the difficult cases are likely to involve similar stored patterns.
+
+For each query, investigate:
+
+    top-1 candidate
+    top-2 candidate
+    top-k candidates
+
+Then compare dimensions where candidates disagree.
+
+For example:
+
+    d_i = |X_top1[i] - X_top2[i]|
+
+A dimension that strongly separates the leading candidates may be strategically important.
+
+However, if q_i is corrupted on that dimension, aggressively trusting it could be harmful.
+
+Therefore consider:
+
+    candidate disagreement
+    ×
+    query reliability
+
+rather than either independently.
+
+Investigate whether precision should emphasize:
+
+    reliable discriminative dimensions
+
+while suppressing:
+
+    corrupted ambiguous dimensions.
+
+============================================================
+13. R MATTERS
+============================================================
+
+R is not decorative.
+
+The dynamics contain:
+
+    R a
+
+Therefore dimensions are coupled.
+
+Study:
+
+- diagonal R_ii
+- row norms
+- column norms
+- off-diagonal strength
+- local coupling
+- graph/Laplacian structure
+- correlations between R and X
+- whether some dimensions have systematically different dynamical stiffness
+
+The model constructs R from a structured random graph/Laplacian plus low-rank terms.
+
+Do not assume R is diagonal.
+
+Investigate whether precision should compensate for dynamical stiffness.
+
+============================================================
+14. HESSIAN / PRECONDITIONING
+============================================================
+
+The Hessian is:
+
+    H = R - eta*beta*X.T@(diag(s)-s s.T)@X
+
+The balance metric explicitly evaluates:
+
+    sqrt(pi) H sqrt(pi)
+
+A natural starting point is diagonal equilibration/preconditioning.
+
+For example:
+
+    pi_i approximately proportional to 1 / H_ii
+
+or related diagonal scaling.
+
+But do not assume that simple inverse diagonal is optimal.
+
+Investigate:
+
+- 1 / H_ii
+- 1 / sqrt(H_ii)
+- Ruiz-style diagonal equilibration
+- iterative diagonal scaling
+- condition-number reduction
+- eigenvalue spread reduction
+- query-dependent H
+- equilibrium H
+- approximating equilibrium H from q
+- blending curvature scaling with query reliability
+
+Remember that pi is mean-normalized and clipped by the harness.
+
+============================================================
+15. RETRIEVAL AND BALANCE ARE DIFFERENT OBJECTIVES
+============================================================
+
+This is a major part of the problem.
+
+A precision vector that improves Hessian conditioning may not improve retrieval.
+
+A precision vector that improves retrieval may make anisotropy worse.
+
+Do not blindly maximize one metric.
+
+Think of:
+
+    precision =
+        retrieval component
+        +
+        geometry/balance component
+
+with robust normalization.
+
+Investigate mixtures such as:
+
+    pi = reliability_component
+         * curvature_component
+
+or convex/log-space combinations.
+
+But test them empirically.
+
+============================================================
+16. VERY IMPORTANT: PRECISION AFFECTS TRAJECTORY
+============================================================
+
+Because:
+
+    a_next = a + dt*(-pi*g + q)
+
+during the input period,
+
+changing pi changes the relative speed at which different dimensions respond to:
+
+- the external query
+- the energy gradient
+- coupling through R
+- attractor forces
+
+This means a good controller may intentionally:
+
+- slow down unreliable dimensions
+- accelerate trustworthy dimensions
+- equalize effective convergence rates
+- suppress dimensions whose gradient would pull the state toward a competing attractor
+- emphasize dimensions that preserve the identity of the source pattern
+
+Think of pi as a diagonal preconditioner for a nonlinear dynamical system.
+
+============================================================
+17. DO NUMERICAL EXPERIMENTS
+============================================================
+
+Use the supplied benchmark.
+
+First establish:
+
+    DummyAgent
+    ClassConditionalAgent
+    VarianceAgent
+
+Then test new candidate families.
+
+Do NOT judge an algorithm from one seed.
+
+Use:
+
+    quick:
+        seeds 42, 101
+
+Then use the full public configuration:
+
+    seeds:
+        42 101 202 303 404
+
+and eventually:
+
+    7 13 31 97 211 503 1009
+
+as specified by the problem.
+
+Track:
+
+    baseline accuracy
+    agent accuracy
+    delta per seed
+    mean delta
+    minimum delta
+    balance reduction per seed
+    mean balance reduction
+    minimum balance reduction
+    retrieval points
+    balance points
+    runtime
+
+The key stability criteria are:
+
+    min_delta >= 0
+    min_reduction > 1
+
+Prefer solutions that remain positive on every seed.
+
+============================================================
+18. SEARCH STRATEGIES TO INVESTIGATE
+============================================================
+
+Investigate these categories systematically.
+
+A. Query reliability
+
+Examples:
+
+    abs(q)
+    q^2
+    local signal-to-noise estimates
+    reconstruction residual
+    q*m
+    |q-m|
+
+B. Pattern discriminativeness
+
+Examples:
+
+    variance across X
+    inverse variance
+    pairwise candidate separation
+    top-k disagreement
+    entropy-weighted dimension importance
+
+C. Model-aware curvature
+
+Examples:
+
+    H diagonal
+    inverse H diagonal
+    sqrt inverse diagonal
+    diagonal equilibration
+    local condition number approximations
+
+D. Dynamics-aware signals
+
+Compute:
+
+    g(q)
+
+and investigate:
+
+    |g_i|
+    q_i*g_i
+    sign(q_i*g_i)
+    Rq
+    candidate gradient
+    gradient under top candidates
+
+Potential interpretation:
+
+- dimensions where gradient strongly fights query may be problematic
+- dimensions where query and attractor force agree may be useful
+- but validate rather than assuming.
+
+E. Candidate competition
+
+Use top 2 / top 3 / top k patterns.
+
+Construct dimension-wise confidence based on:
+
+    posterior probability
+    posterior entropy
+    candidate agreement
+    candidate disagreement
+    query agreement
+
+F. Approximate trajectory simulation
+
+This is strongly encouraged.
+
+The adapter knows:
+
+    X
+    R
+    eta
+    beta
+    dt
+    T_max
+    T_in
+
+It can therefore simulate the frozen dynamics internally for candidate precision vectors.
+
+However:
+
+- do not know the true class
+- do not use hidden labels
+- do not call the evaluator
+- do not modify the actual model
+- do not cheat
+
+The adapter can legitimately evaluate candidate precision vectors according to observable surrogate objectives.
+
+For example, investigate whether a candidate precision causes:
+
+- stronger top-pattern attraction
+- lower energy
+- more stable candidate separation
+- better agreement with the query
+- faster convergence
+- lower ambiguity among candidate attractors
+
+============================================================
+19. POSSIBLE ADVANCED IDEA
+============================================================
+
+Consider query-time optimization.
+
+For each query:
+
+1. Generate an initial precision vector.
+2. Generate several nearby candidate precision vectors.
+3. Approximate the resulting trajectory under the frozen equations.
+4. Score candidates using ONLY observable quantities.
+5. Return the best candidate.
+
+Potential surrogate objectives include:
+
+- separation between top attractor candidates
+- consistency between final state and retrieved pattern
+- energy decrease
+- stability
+- convergence speed
+- agreement with high-confidence dimensions
+- robustness to small perturbations
+- entropy reduction
+
+But this must remain computationally practical.
+
+Do not blindly run thousands of full 3000-step simulations for every query.
+
+Use approximations, reduced horizons, vectorization, early stopping, or analytical shortcuts where justified.
+
+============================================================
+20. POSSIBLE BALANCE OPTIMIZATION
+============================================================
+
+For balance, investigate diagonal preconditioning.
+
+The evaluator's quantity is:
+
+    S = sqrt(pi) H sqrt(pi)
+
+and wants a small eigenvalue spread:
+
+    lambda_max(S) / lambda_min(S)
+
+A good diagonal scaling can approximately equalize curvature.
+
+Investigate iterative scaling schemes.
+
+For example, conceptually:
+
+    pi = ones(N)
+
+    repeatedly:
+        S = sqrt(pi) H sqrt(pi)
+        estimate per-dimension stiffness
+        modify pi
+        normalize mean(pi)=1
+
+But make sure the final precision also remains useful for retrieval.
+
+Do not sacrifice retrieval merely to get balance points.
+
+A robust target may be:
+
+    retrieval first
+    then enough geometry correction to safely exceed 1x balance on every seed.
+
+============================================================
+21. DO NOT OVERFIT THE PUBLIC SEEDS
+============================================================
+
+This is critical.
+
+You may use public seeds for evaluation.
+
+You may NOT build:
+
+    if seed == 42:
+        ...
+    if seed == 101:
+        ...
+
+You cannot directly access the seed anyway.
+
+Do not indirectly infer it through forbidden runtime inspection.
+
+The algorithm must work from:
+
+    X
+    R
+    q
+    model parameters
+
+alone.
+
+The hidden evaluation will generate fresh patterns.
+
+============================================================
+22. DO NOT ASSUME PATTERN ORDER
+============================================================
+
+The K patterns are generated dynamically.
+
+Do not assume:
+
+    pattern 0 = some class
+    pattern 1 = some class
+
+Do not rely on round-robin cluster assignments being semantically meaningful.
+
+You may infer structure numerically from X.
+
+============================================================
+23. PERFORMANCE
+============================================================
+
+The normal evaluation may contain:
+
+    7 seeds
+    3 noise levels
+    250 queries per noise level
+
+which means roughly:
+
+    5250 queries
+
+and each query runs a 3000-step frozen dynamics simulation.
+
+Therefore predict_precision should be reasonably efficient.
+
+Avoid unnecessarily expensive operations such as:
+
+- full 64x64 eigendecomposition thousands of times
+- hundreds of candidate simulations per query
+- huge Python loops
+- repeated construction of large matrices when they can be cached
+
+Precompute everything that depends only on:
+
+    X
+    R
+    model parameters
+
+inside __init__.
+
+Only query-dependent calculations belong in predict_precision.
+
+============================================================
+24. IMPORTANT CACHING OPPORTUNITY
+============================================================
+
+Since the adapter is instantiated once per seed, precompute:
+
+- useful X statistics
+- X.T
+- pairwise pattern similarities
+- dimension variances
+- R diagonal
+- R row norms
+- R-related scaling
+- any seed-independent matrix factors
+- any useful decomposition that depends only on current X/R
+
+Do not precompute anything based on hidden labels.
+
+============================================================
+25. NUMERICAL SAFETY
+============================================================
+
+Every returned precision must be finite.
+
+Protect:
+
+    exp()
+    division
+    normalization
+    inverse curvature
+    logarithms
+
+against numerical instability.
+
+Use stable softmax.
+
+Never return NaN or inf.
+
+If a numerical procedure fails, return a safe finite fallback close to:
+
+    ones(N)
+
+Do not let one pathological query destroy the seed score.
+
+============================================================
+26. ROBUSTNESS IS MORE IMPORTANT THAN EXTREME OPTIMIZATION
+============================================================
+
+The benchmark explicitly penalizes a negative delta on ANY seed.
+
+Therefore do not optimize only:
+
+    mean score
+
+while allowing occasional catastrophic regressions.
+
+Prefer:
+
+    lower variance
+    positive minimum delta
+    positive minimum balance reduction
+
+over spectacular but unstable performance.
+
+Think in terms of worst-case seed robustness.
+
+============================================================
+27. CODE QUALITY
+============================================================
+
+The final file should be clean and explainable.
+
+The judges will manually review it.
+
+Include concise comments explaining:
+
+- what the precision represents
+- what signals are used
+- why the weighting makes sense
+- how numerical safety is handled
+
+Do not generate giant unreadable code.
+
+Do not use obfuscation.
+
+Do not use suspicious tricks.
+
+Do not include benchmark-specific hacks.
+
+============================================================
+28. FINAL FILE REQUIREMENT
+============================================================
+
+The final repository modification MUST be exactly:
+
+    adapters/myteam.py
+
+with:
+
+    class Engine(Adapter)
+
+and:
+
+    predict_precision()
+
+No other repository file should change.
+
+Before finishing:
+
+    git diff --name-only
+
+must effectively show only:
+
+    adapters/myteam.py
+
+If there are other changes, revert/remove them.
+
+============================================================
+29. REQUIRED RESEARCH WORKFLOW
+============================================================
+
+Follow this workflow.
+
+STEP 1:
+Read every relevant source file.
+
+STEP 2:
+Run the identity baseline.
+
+STEP 3:
+Run the supplied example agents.
+
+STEP 4:
+Build a small experimental framework outside the repository or in memory.
+
+STEP 5:
+Test simple query-reliability heuristics.
+
+STEP 6:
+Test pattern-discriminative heuristics.
+
+STEP 7:
+Test curvature/preconditioning heuristics.
+
+STEP 8:
+Test combinations.
+
+STEP 9:
+Investigate trajectory-aware optimization.
+
+STEP 10:
+Investigate balance-aware diagonal scaling.
+
+STEP 11:
+Test on quick seeds.
+
+STEP 12:
+Test promising candidates on the full public five-seed set.
+
+STEP 13:
+Test the strongest candidates on the seven-seed set:
+
+    7 13 31 97 211 503 1009
+
+STEP 14:
+Choose the most robust candidate, not merely the candidate with the highest mean on one run.
+
+STEP 15:
+Write the final implementation only in:
+
+    adapters/myteam.py
+
+STEP 16:
+Run the official local command:
+
+    python run.py --adapter adapters.myteam:Engine \
+      --seeds 7 13 31 97 211 503 1009 \
+      --out report.json
+
+STEP 17:
+Inspect per-seed:
+
+    delta
+    spread_reduction
+
+STEP 18:
+Verify:
+
+    no NaNs
+    no infs
+    correct output shape
+    correct output length
+    no repository files modified besides myteam.py
+
+============================================================
+30. TARGET
+============================================================
+
+The practical target is approximately:
+
+    70–80 total points
+
+A score in this range would already be a strong result for this difficult task.
+
+Do not chase a theoretical perfect score at the expense of robustness.
+
+A very desirable automated profile would be approximately:
+
+    retrieval:
+        strong positive mean delta
+        no negative seed
+
+    balance:
+        >1x on every seed
+        preferably substantially above 1x
+
+    code:
+        clean, readable, legitimate
+
+Remember:
+
+    70 retrieval points
+    20 balance points
+    10 manual code-quality points
+
+Even if retrieval dominates, don't completely ignore balance because the balance points are relatively cheap if a good preconditioner can be integrated without damaging retrieval.
+
+============================================================
+31. CURRENT RESEARCH HINTS
+============================================================
+
+I have already explored a few very crude ideas.
+
+A residual-based heuristic of roughly:
+
+    infer m from softmax(X @ q)
+    use something related to:
+        1 / (abs(q - m) + epsilon)
+
+showed promising retrieval behavior in a very small local experiment.
+
+A simple inverse-Hessian-diagonal style heuristic:
+
+    pi_i approximately 1 / H_ii
+
+gave a small positive balance effect.
+
+However, these experiments used tiny query counts and are NOT reliable benchmark results.
+
+Treat them only as starting hypotheses.
+
+Do not assume either is the final solution.
+
+Investigate why they work or fail.
+
+In particular, investigate a hybrid of:
+
+    query reliability
+    candidate discrimination
+    model curvature
+    trajectory control
+
+with robust normalization.
+
+============================================================
+32. FINAL RESPONSE TO ME
+============================================================
+
+When you finish your research, report:
+
+1. What the frozen model is actually doing.
+2. Why the identity baseline fails on difficult corruptions.
+3. Which precision mechanism you selected.
+4. Why each component exists.
+5. What alternatives you tested.
+6. Per-seed retrieval delta.
+7. Mean and minimum retrieval delta.
+8. Per-seed balance reduction.
+9. Mean and minimum balance reduction.
+10. Final automated score.
+11. Runtime.
+12. Why the approach should generalize to unseen seeds.
+13. Confirmation that ONLY adapters/myteam.py was changed.
+
+Do not claim a method is "perfect" merely because it scores well on public seeds.
+
+The objective is a legitimate, robust, general-purpose precision controller.
+
+Start by reading the entire benchmark code and reasoning from the actual equations.
